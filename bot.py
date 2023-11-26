@@ -1,4 +1,4 @@
-from discord.ext import commands, tasks
+from discord.ext import commands
 import discord
 import time
 import asyncio
@@ -11,9 +11,11 @@ with open('config.json', 'r') as file:
     config_data = json.load(file)
 
 TOKEN = config_data['token']
-MAX_SESSION_TIME_MINUTES = 1
+
+# global object
 session = gameclasses.Session()
 user_manager = gameclasses.UserManager()
+tasks_loop_runner = gameclasses.TaskLoopBotRunner(user_manager, session)
 
 async def send_message(ctx, user_message):
     try:
@@ -36,10 +38,10 @@ def run():
 
     @bot.event
     async def on_message(ctx):
-        # Make sure you are talking to someone else
+        # Make sure you are talking to someone else    
         if ctx.author == bot.user:
             return
-        
+
         # respond start with prefix
         if ctx.content.startswith(bot.command_prefix):
             command_exception_to_whitespace = ['list', 'vote']
@@ -65,19 +67,7 @@ def run():
             else:    
                 user_message = str(ctx.content)
             await send_message(ctx, user_message)
-
-
-    # loop every given minutes
-    @tasks.loop(seconds=5)
-    async def update_game_activity():
-        if session.get_game_session_status:
-            if session.last_activity_time is not None:
-                if time.time() - session.last_activity_time > MAX_SESSION_TIME_MINUTES * 60:
-                    await session.channel.send(responses.game_terminated_message())
-                    session.set_no_game_session()
-                    user_manager.default_user()
-                    update_game_activity.stop()
-
+            
 
     @bot.command(name='command')
     async def help_bot_commands(ctx):
@@ -129,7 +119,6 @@ def run():
         if session.join_message_exist:
             # If it exists, delete the existing message
             await session.join_message_exist.delete()
-
         session.join_message_exist = await ctx.channel.send(embed=embed, view=view)
 
 
@@ -142,12 +131,26 @@ def run():
         if session.game_started:
             await ctx.channel.send(responses.game_channel_message(session.channel))
             return
-        
-        update_game_activity.start()
+
+        tasks_loop_runner.start_game_activity()
         session.set_game_session_status(bot.get_channel(ctx.channel.id))
-        await ctx.channel.send(responses.game_start_message())
-        await asyncio.sleep(0.2)
-        await ctx.channel.send(responses.game_instruction())
+        # create stylized embed messages
+        embed = discord.Embed(
+            title="Welcome!",
+            description="Voting for preferred foods using IRV algorithm",
+            color=discord.Color.dark_teal()
+        )      
+        embed.add_field(name="", value="", inline=False)          # for space purposes
+        embed.add_field(name="Instruction", value=responses.game_instruction())
+        embed.set_field_at(0, name="Commands to Use", value=responses.list_command())
+        embed.set_image(url="https://media.tenor.com/bfxcDYAwqdAAAAAC/eating-food.gif")
+        embed.set_footer(text="Enjoy the game! 🍀")
+        
+        # if exist remove the previous one
+        if session.game_intro:
+            await session.game_intro.delete()
+            session.game_intro = None           # set default
+        session.game_intro = await ctx.channel.send(embed=embed)
 
     
     @bot.command(name='stop')
@@ -161,7 +164,12 @@ def run():
             return
         
         if session.channel == ctx.channel:
-            update_game_activity.stop()
+            if session.game_intro:          # delete game intro message
+                await session.game_intro.delete()
+                session.game_intro = None    
+
+            tasks_loop_runner.stop_game_activity()
+            tasks_loop_runner.stop_vote_result_button()
             session.set_no_game_session()
             user_manager.default_user()
             await ctx.channel.send(responses.game_stop_message())
@@ -231,7 +239,6 @@ def run():
         else:
             content = responses.list_empty_message()
             session.list_object[0] = await ctx.reply(content=content)
-
 
 
     @bot.command(name='vote')
@@ -353,7 +360,7 @@ def run():
     # FOR DEBUGGING PURPOSES
     @bot.command(name='print')
     async def print_list(ctx):
-        print(user_manager.users)
+        ...
 
 
     # run discord bot token

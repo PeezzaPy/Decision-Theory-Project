@@ -27,13 +27,14 @@ def join_quit_players_instruction(channel):
 
 def list_command():
     commands = """
-        **!command** - see all commands
-        **!instr** - display instructions of the game
-        **!start** - start the game
-        **!stop** - stop the game
-        **!join** - register/participate in the game
-        **!list** - make a list of food (!list food1, food2, ...)
-        **!quit** - quit the game  
+        *!command* - see all commands
+        *!instr* - display instructions
+        *!start* - start the game
+        *!stop* - stop the game
+        *!join* - register/participate
+        *!list* - make a list of food
+        *!vote* - make a ranking of choice
+        *!quit* - quit the game  
     """
     return textwrap.dedent(commands)
 
@@ -54,9 +55,6 @@ def game_channel_message(channel):
 
 def game_players_required_message():
     return " The game requires at least **two** players to begin"
-
-def game_start_message():
-    return "The game will start"
 
 def game_started_message():
     return "**Game Started!**"
