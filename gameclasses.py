@@ -11,9 +11,9 @@ class Session:
     player_accept = True
     food_list = None
     list_exist = False
+    list_submit = False
     join_message_exist = None
-    list_message_exist = None
-    vote_message_exist = None
+    list_object = [None, None]
 
     def set_game_session_status(self, channel: str):      
         self.game_started = True
@@ -27,9 +27,9 @@ class Session:
         self.player_accept = True
         self.food_list = None
         self.list_exist = False
+        self.list_submit = False
         self.join_message_exist = None
-        self.list_message_exist = None
-        self.vote_message_exist = None
+        self.list_object = [None, None]
 
     def get_game_session_status(self):
         if self.game_started and self.channel and self.last_activity_time:
@@ -60,27 +60,18 @@ class UserManager:
                 return True
         return False
     
-    def add_vote_exist(self, user_id: int, username: str):        
-        for id, value in self.users.items():
-            if id == user_id and value.get('username') == username:
-                self.users[id]['vote ranking exist'] = True
-        
-    def default_user(self):
-        self.users.clear()
-
-    def is_ranking_list_exist(self, user_id: int, username: str):
-        if not any(self.users.items()):
-            return False
-        
-        for id, value in self.users.items():
-            if id == user_id and value.get('username') == username and value.get('vote ranking list') is not None:
-                return True
-        return False
-    
     def check_user(self, user_id: int, username: str):
         if len(self.users) == 0:
             return False
         return user_id in self.users and self.users[user_id]['username'] == username
+
+    def delete_vote_exist(self, user_id: int, username: str):  
+        for id, value in self.users.items():
+            if id == user_id and value.get('username') == username:
+                self.users[id].pop('vote ranking exist')
+
+    def default_user(self):
+        self.users.clear()
 
     def delete_user(self, user_id: int):
         if len(self.users) == 0:
@@ -90,6 +81,58 @@ class UserManager:
             del self.users[user_id]
             return True
         return False
+ 
+    def get_vote_object(self, user_id: int, username: str):  
+        for id, value in self.users.items():
+            if id == user_id and value.get('username') == username:
+                return value.get('vote object')
+
+    def is_ranking_list_exist(self, user_id: int, username: str):
+        if not any(self.users.items()):
+            return False
+        
+        for id, value in self.users.items():
+            if id == user_id and value.get('username') == username and value.get('vote ranking exist') is not None:
+                return True
+        return False
+    
+    def is_player_food_ranking_list(self, user_id: int, username: str):
+        if not any(self.users.items()):
+            return False
+        
+        for id, value in self.users.items():
+            if id == user_id and value.get('username') == username and value.get('food ranking list') is not None:
+                return True
+        return False
+
+    def set_vote_embed(self, user_id: int, username: str, vote_message):
+        for id, value in self.users.items():
+            if id == user_id and value.get('username') == username:
+                if 'vote object' in self.users[id]:         # if exist
+                    self.users[id]['vote object'][1] = vote_message
+                else:
+                    self.users[id]['vote object'] = [None, vote_message]
+                break
+
+    def set_vote_error_message(self, user_id: int, username: str, vote_error_message):  
+        for id, value in self.users.items():
+            if id == user_id and value.get('username') == username:
+                if 'vote object' in self.users[id]:         # if exist
+                    self.users[id]['vote object'][0] = vote_error_message  
+                else:
+                    self.users[id]['vote object'] = [vote_error_message]
+                break
+    
+    def set_vote_error_message_none(self, user_id: int, username: str):  
+        for id, value in self.users.items():
+            if id == user_id and value.get('username') == username:
+                self.users[id]['vote object'][0] = None
+            
+    def set_vote_exist(self, user_id: int, username: str):        
+        for id, value in self.users.items():
+            if id == user_id and value.get('username') == username:
+                self.users[id]['vote ranking exist'] = True
+                break
 
 
 class ListMenu(discord.ui.View):
@@ -109,7 +152,7 @@ class ListMenu(discord.ui.View):
     @discord.ui.button(label="Submit", style=discord.ButtonStyle.green)
     async def submit(self, interaction: discord.Interaction, button: discord.ui.Button):   
         if self.session.game_started:
-            self.session.list_exist = True
+            self.session.list_submit = True
         # Iterate through participants and send a direct message to each of them
         await self.disable_all_buttons()
         new_embed = discord.Embed(title="Submitted", color=discord.Color.green())
@@ -127,8 +170,8 @@ class ListMenu(discord.ui.View):
                     for i, food in enumerate(self.food_list, start=1):
                         embed.add_field(name=f"**{i}.** {food}", value="", inline=False)
 
-                    await user.send(embed=embed)
-                    await user.send(responses.vote_instruction())
+                    self.user_manager.set_vote_embed(self.ctx.author.id, self.ctx.author.name, await user.send(embed=embed))
+                    await user.send(responses.vote_instruction())                   
                 except discord.HTTPException:
                     print(f"Failed to send a message to {value['username']} | id: {user_id}")
                     await interaction.response.send_message("Error occurred while submitting")
@@ -140,7 +183,10 @@ class ListMenu(discord.ui.View):
         await self.disable_all_buttons()
         new_embed = discord.Embed(title="List deleted", color=discord.Color.red())
         await interaction.response.edit_message(content=None, embed=new_embed, view=self)         # delete the message
-        await interaction.followup.send(responses.list_create_message())
+        if self.session.list_object[0]:             # delete validation messages too if exist
+            await self.session.list_object[0].delete()
+            self.session.list_object[0] = None
+        self.session.list_object[0] = await interaction.followup.send(responses.list_create_message())
 
 
 class VoteMenu(discord.ui.View):
@@ -162,13 +208,27 @@ class VoteMenu(discord.ui.View):
         self.user_manager.add_food_ranking_list(self.ctx.author.id, self.ctx.author.name, self.food_ranking_list)
         new_embed = discord.Embed(title="Submitted", color=discord.Color.green())
         await interaction.response.edit_message(content=None, embed=new_embed, view=self)
+        #inform everyone in game channel, if player submitted
+        await self.session.channel.send(f"Player **{self.ctx.author.name}** has **submitted!**")
         
     @discord.ui.button(label="Delete", style=discord.ButtonStyle.red)
     async def delete(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.disable_all_buttons()
+        self.user_manager.delete_vote_exist(self.ctx.author.id, self.ctx.author.name)       # delete existing initial list
         new_embed = discord.Embed(title="Vote List deleted", color=discord.Color.red())
         await interaction.response.edit_message(content=None, embed=new_embed, view=self)
-        await interaction.followup.send(responses.vote_create_message())
+        # bump the voting list
+        if self.user_manager.get_vote_object(self.ctx.author.id, self.ctx.author.name):
+            bump_message = previous_message = self.user_manager.get_vote_object(self.ctx.author.id, self.ctx.author.name)
+            if previous_message[1]:
+                await previous_message[1].delete()
+                self.user_manager.set_vote_embed(
+                    self.ctx.author.id,
+                    self.ctx.author.name,
+                    await interaction.followup.send(content=responses.vote_create_message() + '\n' + 
+                                                    responses.vote_instruction(), 
+                                                    embed=bump_message[1].embeds[0])
+                )
 
 
 class StartGame(discord.ui.View):

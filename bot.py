@@ -4,8 +4,13 @@ import time
 import asyncio
 import responses
 import gameclasses
+import json
 
-TOKEN = "MTE3NDM2ODY4OTUzODIyMDA5Mw.GGGCiY.0MOsP-HlSnUtS5yL7bP0yuT7izBqGdDrWTb7lw"
+# Read the json file to access the token value
+with open('config.json', 'r') as file:
+    config_data = json.load(file)
+
+TOKEN = config_data['token']
 MAX_SESSION_TIME_MINUTES = 1
 session = gameclasses.Session()
 user_manager = gameclasses.UserManager()
@@ -66,11 +71,12 @@ def run():
     @tasks.loop(seconds=5)
     async def update_game_activity():
         if session.get_game_session_status:
-            if time.time() - session.last_activity_time > MAX_SESSION_TIME_MINUTES * 60:
-                await session.channel.send(responses.game_terminated_message())
-                session.set_no_game_session()
-                user_manager.default_user()
-                update_game_activity.stop()
+            if session.last_activity_time is not None:
+                if time.time() - session.last_activity_time > MAX_SESSION_TIME_MINUTES * 60:
+                    await session.channel.send(responses.game_terminated_message())
+                    session.set_no_game_session()
+                    user_manager.default_user()
+                    update_game_activity.stop()
 
 
     @bot.command(name='command')
@@ -95,7 +101,7 @@ def run():
         user = ctx.author                                   # Get the user who invoked the command
 
         if isinstance(ctx.channel, discord.DMChannel):
-            await ctx.channel.reply(responses.not_for_direct_message())
+            await ctx.channel.send(responses.not_for_direct_message())
             return
         
         if ctx.channel != session.channel:
@@ -130,7 +136,7 @@ def run():
     @bot.command(name='start')
     async def start_game(ctx):
         if isinstance(ctx.channel, discord.DMChannel):
-            await ctx.channel.reply(responses.not_for_direct_message())
+            await ctx.channel.send(responses.not_for_direct_message())
             return
         
         if session.game_started:
@@ -147,7 +153,7 @@ def run():
     @bot.command(name='stop')
     async def stop_game(ctx):
         if isinstance(ctx.channel, discord.DMChannel):
-            await ctx.channel.reply(responses.not_for_direct_message())
+            await ctx.channel.send(responses.not_for_direct_message())
             return
         
         if not session.get_game_session_status():
@@ -157,6 +163,7 @@ def run():
         if session.channel == ctx.channel:
             update_game_activity.stop()
             session.set_no_game_session()
+            user_manager.default_user()
             await ctx.channel.send(responses.game_stop_message())
         else:
             await ctx.channel.send(responses.not_game_channel_message(session.channel))
@@ -172,33 +179,41 @@ def run():
         
         session.last_activity_time = time.time()            # record last activity time
         user = ctx.author                                   # Get the user who invoked the command
-
+    
         if isinstance(ctx.channel, discord.DMChannel):
-            await ctx.channel.reply(responses.not_for_direct_message())
+            await ctx.channel.send(responses.not_for_direct_message())
             return
-
+        
         if ctx.channel != session.channel:
             await ctx.reply(responses.not_game_channel_create_list_message(session.channel))
             return
         
+        # to avoid redundancy of bot messages in LIST
+        if session.list_object[0]:
+            await session.list_object[0].delete()
+            session.list_object[0] = None
+
         if not user_manager.check_user(user.id, user.name):
-            await ctx.reply(responses.not_registed_message() + '\n')
-            await asyncio.sleep(0.2)
+            content = responses.not_registed_message() + '\n'
             embed = discord.Embed(color=discord.Color.blurple())
             embed.description = responses.join_quit_players_instruction(session.channel)
-            await ctx.channel.send(embed=embed)
+            session.list_object[0] = await ctx.channel.send(content=content, embed=embed)
             return
         
         if session.player_accept:
-            await ctx.reply(responses.still_accepting_player_message(session.channel) + '\n')
+            session.list_object[0] = await ctx.reply(responses.still_accepting_player_message(session.channel) + '\n')
             return
         
-        if not food_list:
-            await ctx.reply(responses.list_empty_message())
+        if session.list_submit:
+            session.list_object[0] = await ctx.reply(responses.already_submit_list_message())
             return
         
         if session.list_exist:
-            await ctx.reply(responses.list_exist_message())
+            session.list_object[0] = await ctx.reply(responses.list_exist_message())
+            return
+        
+        if not food_list:
+            session.list_object[0] = await ctx.reply(responses.list_empty_message())
             return
 
         food_items = [food_item.strip() for food_item in food_list.split(',') if food_item.strip()]
@@ -209,14 +224,14 @@ def run():
                 embed.add_field(name=f"{i}. {item}", value="", inline=False)
             view = gameclasses.ListMenu(ctx, bot, user_manager, session, food_items)
             content = responses.list_edit_message()
+        
+            if session.list_object[1]:      # delete orevious object first to avoid redundancy
+                await session.list_object[1].delete()
+            session.list_object[1] = await ctx.reply(embed=embed, view=view, content=content)
         else:
-            embed = view = None
             content = responses.list_empty_message()
+            session.list_object[0] = await ctx.reply(content=content)
 
-        if session.list_message_exist:
-            await session.list_message_exist.delete()
-
-        session.list_message_exist = await ctx.reply(embed=embed, view=view, content=content)
 
 
     @bot.command(name='vote')
@@ -229,40 +244,48 @@ def run():
         
         session.last_activity_time = time.time()            # record last activity time
         user = ctx.author                                   # Get the user who invoked the command
-
+        
         if isinstance(ctx.channel, discord.TextChannel):
             await ctx.channel.send(responses.not_for_channel_message())
             return
         
+        # to remove redundancy of bot messages in VOTE
+        if user_manager.get_vote_object(user.id, user.name):
+            message = user_manager.get_vote_object(user.id, user.name)
+            if message[0]:
+                await message[0].delete()
+                user_manager.set_vote_error_message_none(user.id, user.name)
+                
         if not user_manager.check_user(user.id, user.name):
-            await ctx.reply(responses.not_registed_message() + '\n')
-            await asyncio.sleep(0.2)
+            content = responses.not_registed_message() + '\n'
             embed = discord.Embed(color=discord.Color.blurple())
             embed.description = responses.join_quit_players_instruction(session.channel)
-            await ctx.channel.send(embed=embed)
+            user_manager.set_vote_error_message(user.id, user.name, await ctx.channel.send(embed=embed))
             return
         
         if session.player_accept:
-            await ctx.reply(responses.still_accepting_player_message(session.channel) + '\n')
-            await asyncio.sleep(0.2)
+            content = responses.still_accepting_player_message(session.channel) + '\n'
             embed = discord.Embed(color=discord.Color.blurple())
             embed.description = responses.join_quit_players_instruction(session.channel)
-            await ctx.channel.send(embed=embed)
+            user_manager.set_vote_error_message(user.id, user.name, await ctx.reply(content=content, embed=embed))
             return
 
         if not session.list_exist:
-            await ctx.channel.send(responses.list_not_exist_message(session.channel))
+            user_manager.set_vote_error_message(user.id, user.name, await ctx.channel.send(responses.list_not_exist_message(session.channel)))
             return
 
+        if user_manager.is_player_food_ranking_list(user.id, user.name):
+            user_manager.set_vote_error_message(user.id, user.name, await ctx.channel.send(responses.already_submit_vote_message()))
+            return
+        
         if user_manager.is_ranking_list_exist(user.id, user.name):
-            await ctx.reply(responses.vote_only_once_message())
+            user_manager.set_vote_error_message(user.id, user.name, await ctx.reply(responses.vote_only_once_message()))
             return
-        
+
         if not ranking_list:
-            await ctx.reply(responses.vote_empty_message())
+            user_manager.set_vote_error_message(user.id, user.name, await ctx.reply(responses.vote_empty_message() + '\n' + responses.vote_instruction()))
             return
         
-        user_manager.add_vote_exist(user.id, user.name)         # add bool, if initial list exist
         ranked_food_items = [rank_item.strip() for rank_item in ranking_list.split(',') if rank_item.strip()]
         not_in_food_list = []
         if ranked_food_items:
@@ -271,22 +294,21 @@ def run():
                     not_in_food_list.append(item)
         
             if not not_in_food_list:
+                user_manager.set_vote_exist(user.id, user.name)         # add bool, if initial list exist
                 embed = discord.Embed(title="Preference Ranking of Foods", color=discord.Color.dark_gold())
                 for i, item in enumerate(ranked_food_items, start=1):
                     embed.add_field(name=f"{i}. {item}", value="", inline=False)
                 view = gameclasses.VoteMenu(ctx, user_manager, session, ranked_food_items)
                 content = responses.vote_edit_message()
+                await ctx.reply(embed=embed, view=view, content=content)
             else:
                 embed = view = None
                 content = responses.vote_not_in_food_list_message(not_in_food_list)
+                user_manager.set_vote_error_message(user.id, user.name, await ctx.reply(embed=embed, view=view, content=content))
         else:
             embed = view = None
-            content = responses.vote_empty_message()
-
-        if session.vote_message_exist:
-            await session.vote_message_exist.delete()
-
-        session.vote_message_exist = await ctx.reply(embed=embed, view=view, content=content)
+            content = responses.vote_empty_message() + '\n' + responses.vote_instruction()
+            user_manager.set_vote_error_message(user.id, user.name, await ctx.reply(embed=embed, view=view, content=content))
 
 
     @bot.command(name='quit')

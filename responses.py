@@ -11,7 +11,6 @@ def handle_response(message) -> str:
     return "I'm new, I don't know what you said"
 
 
-
 def help_command():
     return "Use command '**!command**' to see all my commands."
 
@@ -41,8 +40,14 @@ def list_command():
 def already_joined_message():
     return "You have already joined the game"
 
+def already_submit_list_message():
+    return "The list has already been **submitted**, and changes are no longer possible." 
+
+def already_submit_vote_message():
+    return "You have already **submitted** your preferred ranking of choice/s"
+
 def check_direct_message():
-    return "I sent a direct message to every player. Please review and check it out."
+    return "I sent a **direct message to every player**. Please review and check it out."
 
 def game_channel_message(channel):
     return f"Game has already started to the '**{channel}**' text channel."
@@ -129,12 +134,7 @@ def still_accepting_player_message(channel):
     return textwrap.dedent(message)
 
 def vote_create_message():
-    message = """
-        Please provide a ranking of food preferences\n
-        **!vote** *food1, food2, ...* - create a list of food separate by comma
-        \t\t(e.g !vote chicken, pork tonkatsu, ...)
-    """
-    return textwrap.dedent(message)
+    return "Please provide a ranking of food preferences"
 
 def vote_edit_message():
     message = """
@@ -144,12 +144,7 @@ def vote_edit_message():
     return textwrap.dedent(message)
 
 def vote_empty_message():
-    message = """
-        Vote ranking list **cannot be empty**. Please provide a ranking of food preferences\n
-        **!vote** *food1, food2, ...* - create a list of food separate by comma
-        \t\t(e.g !vote chicken, pork tonkatsu, ...)
-    """
-    return textwrap.dedent(message)
+    return "Vote ranking list **cannot be empty**. Please provide a ranking of food preferences"
 
 def vote_instruction():
     message = """
