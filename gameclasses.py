@@ -1,3 +1,4 @@
+from irv import determine_irv_winner
 from discord.ext import tasks
 from dataclasses import dataclass
 import responses
@@ -239,7 +240,7 @@ class VoteMenu(discord.ui.View):
             tasks_loop_runner = TaskLoopBotRunner(self.user_manager, self.session)
             tasks_loop_runner.start_vote_result_button()
 
-        if self.session.total_submit_player > 0:
+        if self.session.total_submit_player > 1:        # tasks loop first before this
             if self.session.result_button_message[1]: 
                 await self.session.result_button_message[1].delete()
                 self.session.result_button_message[1] = None
@@ -279,19 +280,30 @@ class CheckResult(discord.ui.View):
         
     @discord.ui.button(label="Get Result", style=discord.ButtonStyle.primary)
     async def get_result(self, interaction: discord.Interaction, button: discord.ui.Button):
+        embed = discord.Embed(color=discord.Color.dark_teal())
         if self.session.total_submit_player < 2:
-            embed = discord.Embed(
-                description="UNABLE TO EVALUATE UNTIL AT LEAST 2 OR MORE PLAYERS HAVE SUBMITTED",
-                color=discord.Color.dark_teal()
-            )
+            embed.add_field(name="❌ UNABLE TO EVALUATE ❌", value="Need at least 2 or more players submitted their votes")
             await interaction.response.edit_message(embed=embed, view=self)
         else:
             button.disabled = True
-            embed = discord.Embed(
-                description="EVALUATED",
-                color=discord.Color.dark_teal()
-            )
+            copy_users = self.user_manager.users            # get a copy
+
+            # enter IRV algorithm to process votes
+            winner = determine_irv_winner(copy_users, self.session.food_list)
+
+            embed.add_field(name="✅ EVALUATION SUCCESSFUL! ✅", value=f"**\nWinner: {winner}**")
             await interaction.response.edit_message(embed=embed, view=self)
+            
+            # END THE SESSION (may error pa)
+            tasks_loop_runner = TaskLoopBotRunner(self.user_manager, self.session)
+            tasks_loop_runner.stop_game_activity()
+            tasks_loop_runner.stop_vote_result_button()
+            self.session.set_no_game_session()
+            self.user_manager.default_user()
+
+
+        
+    
 
     # def enable_button(self):
     #     self.children[0].disabled = True
@@ -349,3 +361,4 @@ class TaskLoopBotRunner:
             self.session.result_button_message[0] = CheckResult(self.user_manager, self.session)
             self.session.result_button_message[1] = await self.session.channel.send(view=self.session.result_button_message[0])
             self.vote_result_button.stop()       # stop if executes once
+            
