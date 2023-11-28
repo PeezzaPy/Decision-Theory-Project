@@ -5,23 +5,23 @@ import responses
 import discord
 import time
 
-MAX_SESSION_TIME_MINUTES = 1
 
 @dataclass
 class Session:
     game_started = False
-    game_intro = None       # exempted to default
+    game_intro = [None, None]      # exempted to default
     channel = None
     last_activity_time = None
     player_accept = True
     food_list = None
     list_exist = False
     list_submit = False
-    join_message_exist = None
+    join_message_object = [None, None]
     list_object = [None, None]
     submit_button_message = None
     total_submit_player = 0
     result_button_message = [None, None]
+    task_loop_runner = None
 
 
     def set_game_session_status(self, channel: str):      
@@ -30,6 +30,7 @@ class Session:
         self.last_activity_time = time.time()   
 
     def set_no_game_session(self):
+        self.game_intro = [None, None]
         self.game_started = False
         self.channel = None
         self.last_activity_time = None
@@ -37,10 +38,12 @@ class Session:
         self.food_list = None
         self.list_exist = False
         self.list_submit = False
-        self.join_message_exist = None
+        self.join_message_object = [None, None]
         self.list_object = [None, None]
         self.total_submit_player = 0
         self.result_button_message = [None, None]
+        self.task_loop_runner = None
+
 
     def get_game_session_status(self):
         if self.game_started and self.channel and self.last_activity_time:
@@ -212,12 +215,13 @@ class ListMenu(discord.ui.View):
 
 
 class VoteMenu(discord.ui.View):
-    def __init__(self, ctx, user_manager: UserManager, session: Session, food_ranking_list: str):
+    def __init__(self, ctx, user_manager: UserManager, session: Session, food_ranking_list: str, tasks_loop_runner):
         super().__init__()
         self.ctx = ctx
         self.user_manager = user_manager
         self.session = session
         self.food_ranking_list = food_ranking_list
+        self.tasks_loop_runner = tasks_loop_runner
     
     async def disable_all_buttons(self):
         for child in self.children:
@@ -237,8 +241,8 @@ class VoteMenu(discord.ui.View):
         await self.session.channel.send(f"Player **{self.ctx.author.name}** has **submitted!**")
 
         if self.session.total_submit_player == 1:           # display the evaluate button
-            tasks_loop_runner = TaskLoopBotRunner(self.user_manager, self.session)
-            tasks_loop_runner.start_vote_result_button()
+            if not self.tasks_loop_runner.vote_result_button.is_running():
+                self.tasks_loop_runner.vote_result_button.start()
 
         if self.session.total_submit_player > 1:        # tasks loop first before this
             if self.session.result_button_message[1]: 
@@ -248,8 +252,7 @@ class VoteMenu(discord.ui.View):
         
         # if self.session.total_submit_player > 1:
         #     self.session.result_button_message[0].enable_button()
-
-        
+ 
     @discord.ui.button(label="Delete", style=discord.ButtonStyle.red)
     async def delete(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.disable_all_buttons()
@@ -271,10 +274,11 @@ class VoteMenu(discord.ui.View):
 
 
 class CheckResult(discord.ui.View):
-    def __init__(self, user_manager: UserManager, session: Session):
+    def __init__(self, user_manager: UserManager, session: Session, tasks_loop_runner):
         super().__init__()
         self.user_manager = user_manager
         self.session = session
+        self.tasks_loop_runner = tasks_loop_runner
         # Create the button with initial state (not clickable)
         # self.add_item(discord.ui.Button(label="Get Result", style=discord.ButtonStyle.primary,  disabled=True, custom_id="get_result"))
         
@@ -287,23 +291,19 @@ class CheckResult(discord.ui.View):
         else:
             button.disabled = True
             copy_users = self.user_manager.users            # get a copy
-
             # enter IRV algorithm to process votes
             winner = determine_irv_winner(copy_users, self.session.food_list)
 
             embed.add_field(name="✅ EVALUATION SUCCESSFUL! ✅", value=f"**\nWinner: {winner}**")
             await interaction.response.edit_message(embed=embed, view=self)
-            
-            # END THE SESSION (may error pa)
-            tasks_loop_runner = TaskLoopBotRunner(self.user_manager, self.session)
-            tasks_loop_runner.stop_game_activity()
-            tasks_loop_runner.stop_vote_result_button()
+
+            # END SESSION
+            if self.tasks_loop_runner.update_game_activity.is_running():
+                self.tasks_loop_runner.update_game_activity.stop()
+            if self.tasks_loop_runner.vote_result_button.is_running():
+                self.tasks_loop_runner.vote_result_button.stop()
             self.session.set_no_game_session()
             self.user_manager.default_user()
-
-
-        
-    
 
     # def enable_button(self):
     #     self.children[0].disabled = True
@@ -317,48 +317,23 @@ class StartGame(discord.ui.View):
 
     @discord.ui.button(label="Start", style=discord.ButtonStyle.green)
     async def start(self, interaction: discord.Interaction, button: discord.ui.Button):
-       if len(self.user_manager.users) < 1:
-           await interaction.response.send_message(responses.game_players_required_message())
-           return
+        if len(self.user_manager.users) < 2:
+            embed = discord.Embed(color=discord.Color.brand_red())
+            embed.add_field(name=responses.game_players_required_message(), value="")
+            await interaction.response.send_message(embed=embed)
+            # If the list message exist, delete the existing message
+            if self.session.join_message_object[1]:
+                temp_message_object = self.session.join_message_object[1]
+                await temp_message_object.delete()
+                self.session.join_message_object[1] = None
+            # bump the list of joining players
+            self.session.join_message_object[1] = await interaction.followup.send(embed=self.session.join_message_object[0], view=self)
+            return
        
-       button.disabled = True
-       self.session.player_accept = False
-       await interaction.response.edit_message(view=self)
-       await self.channel.send(responses.game_started_message() + '\n' + responses.list_create_message())
+        button.disabled = True
+        self.session.player_accept = False
+        embed = discord.Embed(color=discord.Color.dark_teal())
+        embed.add_field(name=responses.game_started_message(), value=responses.list_create_message())
+        await interaction.response.edit_message(embed=embed, view=self)
             
 
-# BOT TASKS LOOP DECORATOR
-class TaskLoopBotRunner:
-    def __init__(self, user_manager: UserManager, session: Session):
-        self.user_manager = user_manager
-        self.session = session
-
-    def start_game_activity(self):
-        self.update_game_activity.start()
-
-    def start_vote_result_button(self):
-        self.vote_result_button.start()
-
-    def stop_game_activity(self):
-        self.update_game_activity.stop()
-
-    def stop_vote_result_button(self):
-        self.vote_result_button.stop()
-
-    @tasks.loop(seconds=5)
-    async def update_game_activity(self):
-        if self.session.get_game_session_status:
-            if self.session.last_activity_time is not None:
-                if time.time() - self.session.last_activity_time > MAX_SESSION_TIME_MINUTES * 60:
-                    await self.session.channel.send(responses.game_terminated_message())
-                    self.session.set_no_game_session()
-                    self.user_manager.default_user()
-                    self.update_game_activity.stop()
-
-    @tasks.loop(seconds=1)
-    async def vote_result_button(self):
-        if self.session.total_submit_player > 0:
-            self.session.result_button_message[0] = CheckResult(self.user_manager, self.session)
-            self.session.result_button_message[1] = await self.session.channel.send(view=self.session.result_button_message[0])
-            self.vote_result_button.stop()       # stop if executes once
-            
