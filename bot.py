@@ -1,4 +1,4 @@
-from discord.ext import commands
+from discord.ext import commands, tasks
 import discord
 import time
 import asyncio
@@ -9,18 +9,49 @@ import json
 # Read the json file to access the token value
 with open('config.json', 'r') as file:
     config_data = json.load(file)
-
 TOKEN = config_data['token']
+MAX_SESSION_TIME_MINUTES = 1
+
+# BOT TASKS LOOP DECORATOR
+class TaskLoopBotRunner:
+    def __init__(self, user_manager: gameclasses.UserManager, session: gameclasses.Session):
+        self.user_manager = user_manager
+        self.session = session
+
+    @tasks.loop(seconds=5)
+    async def update_game_activity(self):
+        if self.session.get_game_session_status:
+            if self.session.last_activity_time is not None:
+                if time.time() - self.session.last_activity_time > MAX_SESSION_TIME_MINUTES * 60:
+                    await self.session.channel.send(responses.game_terminated_message())
+                    self.session.set_no_game_session()
+                    self.user_manager.default_user()
+                    self.update_game_activity.stop()
+                    self.vote_result_button.stop()
+
+    @tasks.loop(seconds=1)
+    async def vote_result_button(self):
+        if self.session.total_submit_player > 0:
+            self.session.result_button_message[0] = gameclasses.CheckResult(self.user_manager, self.session, tasks_loop_runner)
+            self.session.result_button_message[1] = await self.session.channel.send(view=self.session.result_button_message[0])
+            self.vote_result_button.stop()       # stop if executes once
+
 
 # global object
 session = gameclasses.Session()
 user_manager = gameclasses.UserManager()
-tasks_loop_runner = gameclasses.TaskLoopBotRunner(user_manager, session)
+tasks_loop_runner = TaskLoopBotRunner(user_manager, session)
 
 async def send_message(ctx, user_message):
     try:
-        response = responses.handle_response(user_message)
-        await ctx.channel.send(response)
+        response = responses.handle_response(ctx, user_message)
+        # always include if random message or not in command
+        embed = discord.Embed(
+            title="📜 MY LIST OF COMMANDS 📜",
+            color=discord.Color.dark_grey()
+        )
+        embed.add_field(name="", value=responses.list_command())
+        await ctx.channel.send(content=response, embed=embed)
     except Exception as e:
         print("Error occured: ", e)
 
@@ -45,13 +76,13 @@ def run():
         # respond start with prefix
         if ctx.content.startswith(bot.command_prefix):
             command_exception_to_whitespace = ['list', 'vote']
-            command_name = ctx.content.split(' ')[0][1:]    # extract command name only
+            command_name = ctx.content.split(' ')[0][1:]    # extract command only
             if not bot.get_command(command_name):
                 await send_message(ctx, ctx.content)
                 return
             
             if any(command in ctx.content for command in command_exception_to_whitespace) or len(ctx.content.split(' ')) == 1:
-                await bot.process_commands(ctx)
+                await bot.process_commands(ctx)         # if in commands given in the code provided, process command
                 return
             else:
                 await send_message(ctx, ctx.content)
@@ -71,20 +102,35 @@ def run():
 
     @bot.command(name='command')
     async def help_bot_commands(ctx):
-        await ctx.channel.send(responses.list_command())
+        embed = discord.Embed(
+                title="📜 MY LIST OF COMMANDS 📜",
+                color=discord.Color.dark_grey()
+            )
+        embed.add_field(name="", value=responses.list_command())
+        await ctx.channel.send(embed=embed)
+        return
 
 
     @bot.command(name='instr')
     async def game_instruction(ctx):
-        await ctx.channel.send(responses.game_instruction())
+        embed = discord.Embed(
+                title="📜 INSTRUCTION 📜",
+                color=discord.Color.dark_grey()
+            )
+        embed.add_field(name="", value=responses.game_instruction())
+        await ctx.channel.send(embed=embed)
+        return
 
 
     @bot.command(name='join')
     async def join_game(ctx):
         if not session.get_game_session_status():
-            await ctx.channel.send(responses.no_running_game_message())
-            await asyncio.sleep(0.2)
-            await ctx.channel.send(responses.game_instruction())
+            embed = discord.Embed(
+                title=responses.no_running_game_message(),
+                color=discord.Color.dark_grey()
+            )
+            embed.add_field(name="", value=responses.game_instruction())
+            await ctx.channel.send(embed=embed)
             return
 
         session.last_activity_time = time.time()            # record last activity time
@@ -114,25 +160,34 @@ def run():
             embed.add_field(name=f"{i}. {user_data['username']}", value="", inline=False)
 
         view = gameclasses.StartGame(user_manager, ctx.channel, session)
-
+        session.join_message_object[0] = embed
         # Check if the message with the specified embed already exists
-        if session.join_message_exist:
+        if session.join_message_object[1]:
             # If it exists, delete the existing message
-            await session.join_message_exist.delete()
-        session.join_message_exist = await ctx.channel.send(embed=embed, view=view)
+            await session.join_message_object[1].delete()
+            session.join_message_object[1] = None
+        session.join_message_object[1] = await ctx.channel.send(embed=embed, view=view)
 
 
     @bot.command(name='start')
     async def start_game(ctx):
+        # if exist remove the previous one
+        if session.game_intro[1]:
+            await session.game_intro[1].delete()
+            session.game_intro[1] = None           # set default
+
         if isinstance(ctx.channel, discord.DMChannel):
-            await ctx.channel.send(responses.not_for_direct_message())
+            session.game_intro[1] = await ctx.channel.send(responses.not_for_direct_message())
             return
         
         if session.game_started:
-            await ctx.channel.send(responses.game_channel_message(session.channel))
+            session.game_intro[1] = await ctx.channel.send(responses.game_channel_message(session.channel))
             return
-
-        tasks_loop_runner.start_game_activity()
+        
+        # start the task loop 
+        if not tasks_loop_runner.update_game_activity.is_running():
+            tasks_loop_runner.update_game_activity.start()
+        
         session.set_game_session_status(bot.get_channel(ctx.channel.id))
         # create stylized embed messages
         embed = discord.Embed(
@@ -141,16 +196,12 @@ def run():
             color=discord.Color.dark_teal()
         )      
         embed.add_field(name="", value="", inline=False)          # for space purposes
-        embed.add_field(name="Instruction", value=responses.game_instruction())
-        embed.set_field_at(0, name="Commands to Use", value=responses.list_command())
+        embed.add_field(name="Commands to Use", value=responses.list_command())
+        embed.set_field_at(0, name="Instruction", value=responses.init_game_instruction())
         embed.set_image(url="https://media.tenor.com/bfxcDYAwqdAAAAAC/eating-food.gif")
         embed.set_footer(text="Enjoy the game! 🍀")
         
-        # if exist remove the previous one
-        if session.game_intro:
-            await session.game_intro.delete()
-            session.game_intro = None           # set default
-        session.game_intro = await ctx.channel.send(embed=embed)
+        session.game_intro[0] = await ctx.channel.send(embed=embed)
 
     
     @bot.command(name='stop')
@@ -160,18 +211,21 @@ def run():
             return
         
         if not session.get_game_session_status():
-            await ctx.channel.send(responses.no_running_game_message())
+            embed = discord.Embed(
+                title=responses.no_running_game_message(),
+                color=discord.Color.dark_grey()
+            )
+            embed.add_field(name="", value=responses.game_instruction())
+            await ctx.channel.send(embed=embed)
             return
         
         if session.channel == ctx.channel:
-            if session.game_intro:          # delete game intro message
-                await session.game_intro.delete()
-                session.game_intro = None    
+            if session.game_intro[1]:          # delete game intro message
+                await session.game_intro[1].delete()
+                session.game_intro[1] = None    
 
-            tasks_loop_runner.stop_game_activity()
-            tasks_loop_runner.stop_vote_result_button()
-            session.set_no_game_session()
-            user_manager.default_user()
+            end_session()           # stop the task loop 
+            
             await ctx.channel.send(responses.game_stop_message())
         else:
             await ctx.channel.send(responses.not_game_channel_message(session.channel))
@@ -180,9 +234,12 @@ def run():
     @bot.command(name='list')
     async def get_food_list(ctx, *, food_list=None):
         if not session.get_game_session_status():
-            await ctx.channel.send(responses.no_running_game_message())
-            await asyncio.sleep(0.2)
-            await ctx.channel.send(responses.game_instruction())
+            embed = discord.Embed(
+                title=responses.no_running_game_message(),
+                color=discord.Color.dark_grey()
+            )
+            embed.add_field(name="", value=responses.game_instruction())
+            await ctx.channel.send(embed=embed)
             return
         
         session.last_activity_time = time.time()            # record last activity time
@@ -244,9 +301,12 @@ def run():
     @bot.command(name='vote')
     async def vote_ranking(ctx, *, ranking_list=None):
         if not session.get_game_session_status():
-            await ctx.channel.send(responses.no_running_game_message())
-            await asyncio.sleep(0.2)
-            await ctx.channel.send(responses.game_instruction())
+            embed = discord.Embed(
+                title=responses.no_running_game_message(),
+                color=discord.Color.dark_grey()
+            )
+            embed.add_field(name="", value=responses.game_instruction())
+            await ctx.channel.send(embed=embed)
             return
         
         session.last_activity_time = time.time()            # record last activity time
@@ -305,7 +365,7 @@ def run():
                 embed = discord.Embed(title="Preference Ranking of Foods", color=discord.Color.dark_gold())
                 for i, item in enumerate(ranked_food_items, start=1):
                     embed.add_field(name=f"{i}. {item}", value="", inline=False)
-                view = gameclasses.VoteMenu(ctx, user_manager, session, ranked_food_items)
+                view = gameclasses.VoteMenu(ctx, user_manager, session, ranked_food_items, tasks_loop_runner)
                 content = responses.vote_edit_message()
                 await ctx.reply(embed=embed, view=view, content=content)
             else:
@@ -356,6 +416,15 @@ def run():
         else:
             await ctx.reply(responses.not_game_channel_quit_message(session.channel))
         
+
+    def end_session():
+        if tasks_loop_runner.update_game_activity.is_running():
+            tasks_loop_runner.update_game_activity.stop()
+        if tasks_loop_runner.vote_result_button.is_running():
+            tasks_loop_runner.vote_result_button.stop()
+        session.set_no_game_session()
+        user_manager.default_user()
+
 
     # FOR DEBUGGING PURPOSES
     @bot.command(name='print')
