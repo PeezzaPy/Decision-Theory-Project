@@ -1,10 +1,10 @@
 from irv import determine_irv_winner
-from discord.ext import tasks
 from dataclasses import dataclass
 import responses
 import discord
 import time
 
+process_string = None
 
 @dataclass
 class Session:
@@ -22,7 +22,7 @@ class Session:
     total_submit_player = 0
     result_button_message = [None, None]
     task_loop_runner = None
-
+    is_result = False
 
     def set_game_session_status(self, channel: str):      
         self.game_started = True
@@ -43,7 +43,7 @@ class Session:
         self.total_submit_player = 0
         self.result_button_message = [None, None]
         self.task_loop_runner = None
-
+        self.is_result = False
 
     def get_game_session_status(self):
         if self.game_started and self.channel and self.last_activity_time:
@@ -281,33 +281,52 @@ class CheckResult(discord.ui.View):
         self.tasks_loop_runner = tasks_loop_runner
         # Create the button with initial state (not clickable)
         # self.add_item(discord.ui.Button(label="Get Result", style=discord.ButtonStyle.primary,  disabled=True, custom_id="get_result"))
-        
+
+    def end_session(self):
+        global process_string
+        # END SESSION
+        process_string = None      # set to default
+        if self.tasks_loop_runner.update_game_activity.is_running():
+            self.tasks_loop_runner.update_game_activity.stop()
+        if self.tasks_loop_runner.vote_result_button.is_running():
+            self.tasks_loop_runner.vote_result_button.stop()
+        self.session.set_no_game_session()
+        self.user_manager.default_user()
+
+    async def disable_all_buttons(self):
+        for child in self.children:
+            if isinstance(child, discord.ui.Button):
+                child.disabled = True
+
     @discord.ui.button(label="Get Result", style=discord.ButtonStyle.primary)
     async def get_result(self, interaction: discord.Interaction, button: discord.ui.Button):
+        global process_string
+
         embed = discord.Embed(color=discord.Color.dark_teal())
-        if self.session.total_submit_player < 2:
-            embed.add_field(name="❌ UNABLE TO EVALUATE ❌", value="Need at least 2 or more players submitted their votes")
+        if not self.session.get_game_session_status():
+            await self.disable_all_buttons()
+            embed.add_field(name="❓ NO GAME FOUND ❓", value="Use command **!start** to initialize a game")
+            await interaction.response.edit_message(embed=embed, view=self)
+        elif self.session.total_submit_player < len(self.user_manager.users):
+            embed.add_field(name="❌ UNABLE TO EVALUATE ❌", value="All players need to submit their votes")
             await interaction.response.edit_message(embed=embed, view=self)
         else:
-            button.disabled = True
+            await self.disable_all_buttons()
             copy_users = self.user_manager.users            # get a copy
             # enter IRV algorithm to process votes
             winner = determine_irv_winner(copy_users, self.session.food_list)
-
-            embed.add_field(name="✅ EVALUATION SUCCESSFUL! ✅", value=f"**\nWinner: {winner}**")
+            # winner, process_string = determine_irv_winner(copy_users, self.session.food_list)
+            embed.add_field(name="✅ EVALUATION SUCCESSFUL! ✅", value=f"**\nWinner: {winner}**", inline=False)
+            # embed.add_field(name="PROCESS USING IRV ALGORITHM", value="", inline=False)
+            # embed.add_field(name="", value=process_string, inline=True)
             await interaction.response.edit_message(embed=embed, view=self)
 
-            # END SESSION
-            if self.tasks_loop_runner.update_game_activity.is_running():
-                self.tasks_loop_runner.update_game_activity.stop()
-            if self.tasks_loop_runner.vote_result_button.is_running():
-                self.tasks_loop_runner.vote_result_button.stop()
-            self.session.set_no_game_session()
-            self.user_manager.default_user()
 
-    # def enable_button(self):
-    #     self.children[0].disabled = True
-            
+class SeeProcessResult(discord.ui.View):
+    def __init__(self):
+        super().__init__()
+
+
 class StartGame(discord.ui.View):
     def __init__(self, user_manager: UserManager, channel: discord.TextChannel, session: Session):
         super().__init__()
@@ -317,7 +336,7 @@ class StartGame(discord.ui.View):
 
     @discord.ui.button(label="Start", style=discord.ButtonStyle.green)
     async def start(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if len(self.user_manager.users) < 2:
+        if len(self.user_manager.users) < 1:
             embed = discord.Embed(color=discord.Color.brand_red())
             embed.add_field(name=responses.game_players_required_message(), value="")
             await interaction.response.send_message(embed=embed)

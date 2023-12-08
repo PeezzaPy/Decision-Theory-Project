@@ -151,7 +151,7 @@ def run():
             await ctx.reply("Cannot join the game. " + responses.game_channel_message(ctx.channel))
             return
         
-        status = user_manager.add_user(user.id, user.name)
+        status = user_manager.add_user(user.id, user.name)      
         if status:
             await ctx.reply(f"**@{user.name}** join the game")
 
@@ -402,17 +402,31 @@ def run():
             return
         
         if session.channel == ctx.channel:
-            user_manager.delete_user(user.id)       # delete user from the list of players
-            await ctx.reply(responses.quit_game_message()) 
-            embed = discord.Embed(title="List of Players", color=discord.Color.blurple())
-            view = gameclasses.StartGame(user_manager, ctx.channel, session)
-            if any(user_manager.users.items()):
-                for i, (user_id, user_data) in enumerate(user_manager.users.items(), start=1):
-                    embed.add_field(name=f"{i}. {user_data['username']}", value="", inline=False)
-                await ctx.channel.send(embed=embed, view=view)
+            if not session.food_list:
+                if session.join_message_object[1]:         
+                    await session.join_message_object[1].delete()
+                    session.join_message_object[1] = None
+
+                status = user_manager.delete_user(user.id)       # delete user from the list of players
+                if status:
+                    await ctx.reply(responses.quit_game_message()) 
+                embed = discord.Embed(title="List of Players", color=discord.Color.blurple())
+                view = gameclasses.StartGame(user_manager, ctx.channel, session)
+                # If it exists, delete the existing message
+                if any(user_manager.users.items()):
+                    for i, (user_id, user_data) in enumerate(user_manager.users.items(), start=1):
+                        embed.add_field(name=f"{i}. {user_data['username']}", value="", inline=False)
+                    session.join_message_object[1] = await ctx.channel.send(embed=embed, view=view)
+                else:
+                    embed.description = "No players have joined yet."
+                    await ctx.channel.send(embed=embed)
             else:
-                embed.description = "No players have joined yet."
-                await ctx.channel.send(embed=embed)
+                await ctx.reply(responses.quit_game_message()) 
+                # If it exists, delete the existing message
+                if session.result_button_message[1]: 
+                    await session.result_button_message[1].delete()
+                    session.result_button_message[1] = None
+                session.result_button_message[1] = await session.channel.send(view=session.result_button_message[0])
         else:
             await ctx.reply(responses.not_game_channel_quit_message(session.channel))
         
@@ -429,8 +443,8 @@ def run():
     # FOR DEBUGGING PURPOSES
     @bot.command(name='print')
     async def print_list(ctx):
-        ...
-
+        print(len(user_manager.users))
+        ...     # more experiments/troubleshooting
 
     # run discord bot token
     bot.run(TOKEN)
