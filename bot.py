@@ -24,7 +24,7 @@ class TaskLoopBotRunner:
             if self.session.last_activity_time is not None:
                 if time.time() - self.session.last_activity_time > MAX_SESSION_TIME_MINUTES * 60:
                     await self.session.channel.send(responses.game_terminated_message())
-                    self.session.set_no_game_session()
+                    await self.session.set_no_game_session()
                     self.user_manager.default_user()
                     self.update_game_activity.stop()
                     self.vote_result_button.stop()
@@ -151,6 +151,10 @@ def run():
             await ctx.reply("Cannot join the game. " + responses.game_channel_message(ctx.channel))
             return
         
+        if session.join_message_object[1]:         
+            await session.join_message_object[1].delete()
+            session.join_message_object[1] = None
+
         status = user_manager.add_user(user.id, user.name)      
         if status:
             await ctx.reply(f"**@{user.name}** join the game")
@@ -380,36 +384,43 @@ def run():
 
     @bot.command(name='quit')
     async def quit(ctx):
+        if session.game_quit[0]:
+            await session.game_quit[0].delete()
+            session.game_quit[0] = None
+        if session.game_quit[1]:
+            await session.game_quit[1].delete()
+            session.game_quit[1] = None
+
         if not session.get_game_session_status():
-            await ctx.channel.send(responses.no_running_game_message())
+            session.game_quit[0] = await ctx.channel.send(responses.no_running_game_message())
             await asyncio.sleep(0.2)
-            await ctx.channel.send(responses.game_instruction())
+            session.game_quit[1] = await ctx.channel.send(responses.game_instruction())
             return
         
         session.last_activity_time = time.time()            # record last activity time
         user = ctx.author                                   # Get the user who invoked the command
 
         if isinstance(ctx.channel, discord.DMChannel):
-            await ctx.channel.reply(responses.not_for_direct_message())
+            session.game_quit[0] = await ctx.channel.reply(responses.not_for_direct_message())
             return
         
         if not user_manager.check_user(user.id, user.name):
-            await ctx.reply(responses.not_registed_message() + '\n')
+            session.game_quit[0] = await ctx.reply(responses.not_registed_message() + '\n')
             await asyncio.sleep(0.2)
             embed = discord.Embed(color=discord.Color.blurple())
             embed.description = responses.join_quit_players_instruction(session.channel)
-            await ctx.channel.send(embed=embed)
+            session.game_quit[1] = await ctx.channel.send(embed=embed)
             return
         
         if session.channel == ctx.channel:
+            status = user_manager.delete_user(user.id)       # delete user from the list of players
             if not session.food_list:
                 if session.join_message_object[1]:         
                     await session.join_message_object[1].delete()
                     session.join_message_object[1] = None
 
-                status = user_manager.delete_user(user.id)       # delete user from the list of players
                 if status:
-                    await ctx.reply(responses.quit_game_message()) 
+                    session.game_quit[0] = await ctx.reply(responses.quit_game_message()) 
                 embed = discord.Embed(title="List of Players", color=discord.Color.blurple())
                 view = gameclasses.StartGame(user_manager, ctx.channel, session)
                 # If it exists, delete the existing message
@@ -419,13 +430,14 @@ def run():
                     session.join_message_object[1] = await ctx.channel.send(embed=embed, view=view)
                 else:
                     embed.description = "No players have joined yet."
-                    await ctx.channel.send(embed=embed)
+                    session.join_message_object[1] = await ctx.channel.send(embed=embed)
             else:
                 await ctx.reply(responses.quit_game_message()) 
                 # If it exists, delete the existing message
                 if session.result_button_message[1]: 
                     await session.result_button_message[1].delete()
                     session.result_button_message[1] = None
+                    session.result_button_message[0] = gameclasses.CheckResult(user_manager, session, tasks_loop_runner)
                 session.result_button_message[1] = await session.channel.send(view=session.result_button_message[0])
         else:
             await ctx.reply(responses.not_game_channel_quit_message(session.channel))

@@ -10,6 +10,7 @@ process_string = None
 class Session:
     game_started = False
     game_intro = [None, None]      # exempted to default
+    game_quit = [None, None]
     channel = None
     last_activity_time = None
     player_accept = True
@@ -29,8 +30,33 @@ class Session:
         self.channel = channel
         self.last_activity_time = time.time()   
 
-    def set_no_game_session(self):
+    async def set_no_game_session(self):
+        if self.game_intro[0]:
+            await self.game_intro[0].delete()
+        if self.game_intro[1]:
+            await self.game_intro[1].delete()
         self.game_intro = [None, None]
+
+        if self.game_quit[0]:
+            await self.game_quit[0].delete()
+        if self.game_quit[1]:      
+            await self.game_quit[1].delete()
+        self.game_quit = [None, None]
+
+        if self.join_message_object[1]:      
+            await self.join_message_object[1].delete()
+        self.join_message_object = [None, None]
+
+        if self.list_object[0]:
+            await self.list_object[0].delete()
+        if self.list_object[1]:      
+            await self.list_object[1].delete()
+        self.list_object = [None, None]
+
+        if self.result_button_message[1]:      
+            await self.result_button_message[1].delete()
+        self.result_button_message = [None, None]
+
         self.game_started = False
         self.channel = None
         self.last_activity_time = None
@@ -38,10 +64,7 @@ class Session:
         self.food_list = None
         self.list_exist = False
         self.list_submit = False
-        self.join_message_object = [None, None]
-        self.list_object = [None, None]
         self.total_submit_player = 0
-        self.result_button_message = [None, None]
         self.task_loop_runner = None
         self.is_result = False
 
@@ -279,9 +302,7 @@ class CheckResult(discord.ui.View):
         self.user_manager = user_manager
         self.session = session
         self.tasks_loop_runner = tasks_loop_runner
-        # Create the button with initial state (not clickable)
-        # self.add_item(discord.ui.Button(label="Get Result", style=discord.ButtonStyle.primary,  disabled=True, custom_id="get_result"))
-
+       
     def end_session(self):
         global process_string
         # END SESSION
@@ -336,7 +357,7 @@ class StartGame(discord.ui.View):
 
     @discord.ui.button(label="Start", style=discord.ButtonStyle.green)
     async def start(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if len(self.user_manager.users) < 1:
+        if len(self.user_manager.users) < 2:            # need 2 or more players to start
             embed = discord.Embed(color=discord.Color.brand_red())
             embed.add_field(name=responses.game_players_required_message(), value="")
             await interaction.response.send_message(embed=embed)

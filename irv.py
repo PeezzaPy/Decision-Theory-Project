@@ -35,12 +35,6 @@ def determine_irv_winner(users, food_list):
         # Find the candidates with the lowest votes except zero (0)
         non_zero_votes = {vote: count for vote, count in vote_count.items() if count != 0}
         
-        # if only one element has vote
-        if len(non_zero_votes) == 1:
-            result_key = list(non_zero_votes.keys())[0]
-            # process_string += f"\n**Return** {result_key}\n"
-            return result_key.replace("(", "").replace(")", "") #, process_string
-
         # Get the candidate(s) with minimum vote
         min_votes = min(non_zero_votes.values())
         min_candidates = [choice for choice, votes in vote_count.items() if votes == min_votes]
@@ -54,6 +48,12 @@ def determine_irv_winner(users, food_list):
         selected_max_candidate = random.choice(max_candidates)
         print(f"Selected max candidate: {selected_max_candidate}")
         # process_string += f"**Selected max candidate:** {selected_max_candidate}\n"
+
+        # if only one element has vote
+        if len(non_zero_votes) == 1:
+            result_key = list(non_zero_votes.keys())[0]
+            # process_string += f"\n**Return** {result_key}\n"
+            return result_key.replace("(", "").replace(")", "") #, process_string
 
         # Return already the winner if the min_votes is greater than quota (total_votes/2 + 1)
         if max_votes >= (total_votes // 2 + 1):
