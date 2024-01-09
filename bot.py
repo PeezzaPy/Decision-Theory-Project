@@ -228,7 +228,7 @@ def run():
                 await session.game_intro[1].delete()
                 session.game_intro[1] = None    
 
-            end_session()           # stop the task loop 
+            await end_session()           # stop the task loop 
             
             await ctx.channel.send(responses.game_stop_message())
         else:
@@ -443,12 +443,12 @@ def run():
             await ctx.reply(responses.not_game_channel_quit_message(session.channel))
         
 
-    def end_session():
+    async def end_session():
         if tasks_loop_runner.update_game_activity.is_running():
             tasks_loop_runner.update_game_activity.stop()
         if tasks_loop_runner.vote_result_button.is_running():
             tasks_loop_runner.vote_result_button.stop()
-        session.set_no_game_session()
+        await session.set_no_game_session()
         user_manager.default_user()
 
 
