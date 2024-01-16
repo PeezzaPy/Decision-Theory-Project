@@ -10,7 +10,7 @@ import json
 with open('config.json', 'r') as file:
     config_data = json.load(file)
 TOKEN = config_data['token']
-MAX_SESSION_TIME_MINUTES = 1
+MAX_SESSION_TIME_MINUTES = 15
 
 # BOT TASKS LOOP DECORATOR
 class TaskLoopBotRunner:
@@ -401,7 +401,7 @@ def run():
         user = ctx.author                                   # Get the user who invoked the command
 
         if isinstance(ctx.channel, discord.DMChannel):
-            session.game_quit[0] = await ctx.channel.reply(responses.not_for_direct_message())
+            session.game_quit[0] = await ctx.channel.send(responses.not_for_direct_message())
             return
         
         if not user_manager.check_user(user.id, user.name):
